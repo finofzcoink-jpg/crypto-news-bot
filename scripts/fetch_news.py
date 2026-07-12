@@ -2,22 +2,24 @@ import os, requests, hashlib, re
 import feedparser
 from datetime import datetime
 
-BASE44_ENDPOINT = os.environ["BASE44_ENDPOINT"]
-BASE44_SECRET = os.environ["BASE44_INGEST_SECRET"]
+BASE44_APP_ID = os.environ["BASE44_APP_ID"]
+BASE44_API_KEY = os.environ["BASE44_API_KEY"]
 
-# فیدهای رایگان خبری کریپتو - بدون نیاز به API Key
+BASE44_URL = f"https://app.base44.com/api/apps/{BASE44_APP_ID}/entities/NewsArticle"
+
 RSS_FEEDS = [
     "https://www.coindesk.com/arc/outboundfeeds/rss/",
     "https://cointelegraph.com/rss",
 ]
 
+# دسته‌بندی‌های مجاز طبق اسکیمای Base44
+VALID_CATEGORIES = ["Bitcoin", "Altcoins", "DeFi", "NFT", "Regulation"]
+
 def extract_image(entry):
-    # خیلی از فیدها عکس رو توی media_content یا media_thumbnail می‌ذارن
     if "media_content" in entry and entry.media_content:
         return entry.media_content[0].get("url")
     if "media_thumbnail" in entry and entry.media_thumbnail:
         return entry.media_thumbnail[0].get("url")
-    # بعضی وقت‌ها عکس داخل خود summary/description به‌صورت تگ <img> هست
     match = re.search(r'<img[^>]+src="([^"]+)"', entry.get("summary", ""))
     if match:
         return match.group(1)
@@ -33,14 +35,21 @@ def has_good_image(url):
         return False
 
 def clean_text(html_text):
-    # حذف تگ‌های HTML از متن خام
     text = re.sub(r"<[^>]+>", " ", html_text or "")
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
-def slugify(title):
-    s = re.sub(r"[^a-zA-Z0-9]+", "-", title.lower()).strip("-")
-    return s[:80]
+def guess_category(title, summary):
+    text = (title + " " + summary).lower()
+    if "bitcoin" in text or "btc" in text:
+        return "Bitcoin"
+    if "defi" in text:
+        return "DeFi"
+    if "nft" in text:
+        return "NFT"
+    if "regulat" in text or "sec " in text or "law" in text:
+        return "Regulation"
+    return "Altcoins"
 
 def format_markdown(title, raw_html):
     body = clean_text(raw_html)
@@ -49,32 +58,35 @@ def format_markdown(title, raw_html):
 def push_to_base44(entry, image_url):
     title = entry.get("title", "بدون عنوان")
     raw_summary = entry.get("summary", "")
+    clean_summary = clean_text(raw_summary)
     published = entry.get("published", datetime.utcnow().isoformat())
 
     payload = {
         "title": title,
-        "slug": slugify(title) + "-" + hashlib.md5(title.encode()).hexdigest()[:6],
+        "summary": clean_summary[:200] if clean_summary else title,
         "content": format_markdown(title, raw_summary),
-        "excerpt": clean_text(raw_summary)[:200],
+        "category": guess_category(title, clean_summary),
         "image_url": image_url,
-        "source_name": entry.get("source_name", "unknown"),
-        "source_url": entry.get("link", ""),
-        "published_at": published,
-        "tags": [],
+        "author": entry.get("source_name", "unknown"),
+        "published_date": published,
     }
+
     r = requests.post(
-        BASE44_ENDPOINT,
+        BASE44_URL,
         json=payload,
-        headers={"x-api-key": BASE44_SECRET},
+        headers={
+            "api_key": BASE44_API_KEY,
+            "Content-Type": "application/json"
+        },
         timeout=10
     )
-    print(title, "->", r.status_code)
+    print(title, "->", r.status_code, r.text[:200])
 
 def main():
     for feed_url in RSS_FEEDS:
         feed = feedparser.parse(feed_url)
         source_name = feed.feed.get("title", feed_url)
-        for entry in feed.entries[:10]:  # فقط ۱۰ خبر آخر هر منبع
+        for entry in feed.entries[:10]:
             entry["source_name"] = source_name
             image_url = extract_image(entry)
             if has_good_image(image_url):
