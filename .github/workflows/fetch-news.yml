@@ -21,6 +21,6 @@ jobs:
 
       - name: Run news fetcher
         env:
-          BASE44_ENDPOINT: ${{ secrets.BASE44_ENDPOINT }}
-          BASE44_INGEST_SECRET: ${{ secrets.BASE44_INGEST_SECRET }}
+          BASE44_APP_ID: ${{ secrets.BASE44_APP_ID }}
+          BASE44_API_KEY: ${{ secrets.BASE44_API_KEY }}
         run: python scripts/fetch_news.py
