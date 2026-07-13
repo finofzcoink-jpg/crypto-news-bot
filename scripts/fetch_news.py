@@ -1,4 +1,4 @@
-import os, requests, hashlib, re
+import os, requests, re
 import feedparser
 from datetime import datetime
 
@@ -7,9 +7,9 @@ BASE44_API_KEY = os.environ["BASE44_API_KEY"]
 
 BASE44_URL = f"https://app.base44.com/api/apps/{BASE44_APP_ID}/entities/NewsArticle"
 
+# لیست منابع خبری معتبر - می‌تونی بعداً منابع بیشتری اضافه کنی
 RSS_FEEDS = [
-    {"url": "https://chainwire.org/feed/", "source_name": "Chainwire"},
-    {"url": "https://www.bnbchain.org/en/blog/rss.xml", "source_name": "BNB Chain"},
+    {"url": "https://cryptoslate.com/feed/", "source_name": "CryptoSlate"},
 ]
 
 def extract_image(entry):
@@ -27,7 +27,7 @@ def has_good_image(url):
     if not url:
         return False
     try:
-        r = requests.head(url, timeout=5)
+        r = requests.head(url, timeout=5, allow_redirects=True)
         return r.status_code == 200 and "image" in r.headers.get("Content-Type", "")
     except Exception:
         return False
@@ -49,10 +49,6 @@ def get_full_content(entry):
         return entry["content"][0]["value"]
     return entry.get("summary", "")
 
-def slugify(title):
-    s = re.sub(r"[^a-zA-Z0-9]+", "-", title.lower()).strip("-")
-    return s[:80]
-
 def guess_category(title, text):
     t = (title + " " + text).lower()
     if "bitcoin" in t or "btc" in t:
@@ -66,12 +62,12 @@ def guess_category(title, text):
     return "Altcoins"
 
 def push_to_base44(entry, image_url, source_name):
-    title = entry.get("title", "بدون عنوان")
+    title = entry.get("title", "Untitled")
     raw_html = get_full_content(entry)
     markdown_body = html_to_markdown(raw_html)
     published = entry.get("published", datetime.utcnow().isoformat())
 
-    full_content = f"{markdown_body}\n\n---\n*منبع: {source_name}*"
+    full_content = f"{markdown_body}\n\n---\n*Source: {source_name}*"
 
     plain_text = re.sub(r"[#*\-]", "", markdown_body)
     summary = re.sub(r"\s+", " ", plain_text).strip()[:200]
@@ -96,11 +92,19 @@ def push_to_base44(entry, image_url, source_name):
 
 def main():
     for feed_info in RSS_FEEDS:
-        feed = feedparser.parse(feed_info["url"])
-        for entry in feed.entries[:10]:
-            image_url = extract_image(entry)
-            if has_good_image(image_url):
-                push_to_base44(entry, image_url, feed_info["source_name"])
+        try:
+            feed = feedparser.parse(feed_info["url"])
+            if not feed.entries:
+                print(f"[WARN] No entries found for {feed_info['source_name']} ({feed_info['url']})")
+                continue
+            for entry in feed.entries[:10]:
+                image_url = extract_image(entry)
+                if has_good_image(image_url):
+                    push_to_base44(entry, image_url, feed_info["source_name"])
+                else:
+                    print(f"[SKIP] No good image for: {entry.get('title', '')}")
+        except Exception as e:
+            print(f"[ERROR] Failed to process {feed_info['source_name']}: {e}")
 
 if __name__ == "__main__":
     main()
