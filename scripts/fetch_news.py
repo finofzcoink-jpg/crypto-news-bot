@@ -7,9 +7,9 @@ BASE44_API_KEY = os.environ["BASE44_API_KEY"]
 
 BASE44_URL = f"https://app.base44.com/api/apps/{BASE44_APP_ID}/entities/NewsArticle"
 
-# لیست منابع خبری معتبر - می‌تونی بعداً منابع بیشتری اضافه کنی
 RSS_FEEDS = [
     {"url": "https://cryptoslate.com/feed/", "source_name": "CryptoSlate"},
+    {"url": "https://www.prnewswire.com/rss/financial-services-latest-news/cryptocurrency-list.rss", "source_name": "PR Newswire"},
 ]
 
 def extract_image(entry):
@@ -17,6 +17,10 @@ def extract_image(entry):
         return entry.media_content[0].get("url")
     if "media_thumbnail" in entry and entry.media_thumbnail:
         return entry.media_thumbnail[0].get("url")
+    if entry.get("enclosures"):
+        for enc in entry.enclosures:
+            if "image" in enc.get("type", ""):
+                return enc.get("href") or enc.get("url")
     raw = entry.get("content", [{}])[0].get("value", "") if entry.get("content") else entry.get("summary", "")
     match = re.search(r'<img[^>]+src="([^"]+)"', raw)
     if match:
@@ -95,16 +99,16 @@ def main():
         try:
             feed = feedparser.parse(feed_info["url"])
             if not feed.entries:
-                print(f"[WARN] No entries found for {feed_info['source_name']} ({feed_info['url']})")
+                print(f"[WARN] No entries for {feed_info['source_name']}")
                 continue
             for entry in feed.entries[:10]:
                 image_url = extract_image(entry)
                 if has_good_image(image_url):
                     push_to_base44(entry, image_url, feed_info["source_name"])
                 else:
-                    print(f"[SKIP] No good image for: {entry.get('title', '')}")
+                    print(f"[SKIP] No good image: {entry.get('title', '')}")
         except Exception as e:
-            print(f"[ERROR] Failed to process {feed_info['source_name']}: {e}")
+            print(f"[ERROR] {feed_info['source_name']}: {e}")
 
 if __name__ == "__main__":
     main()
