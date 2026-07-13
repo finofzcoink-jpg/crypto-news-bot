@@ -53,6 +53,12 @@ def get_full_content(entry):
         return entry["content"][0]["value"]
     return entry.get("summary", "")
 
+def get_published_date(entry):
+    published_parsed = entry.get("published_parsed")
+    if published_parsed:
+        return datetime(*published_parsed[:6]).strftime("%Y-%m-%d")
+    return datetime.utcnow().strftime("%Y-%m-%d")
+
 def guess_category(title, text):
     t = (title + " " + text).lower()
     if "bitcoin" in t or "btc" in t:
@@ -69,7 +75,7 @@ def push_to_base44(entry, image_url, source_name):
     title = entry.get("title", "Untitled")
     raw_html = get_full_content(entry)
     markdown_body = html_to_markdown(raw_html)
-    published = entry.get("published", datetime.utcnow().isoformat())
+    published = get_published_date(entry)
 
     full_content = f"{markdown_body}\n\n---\n*Source: {source_name}*"
 
