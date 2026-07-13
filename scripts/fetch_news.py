@@ -8,19 +8,17 @@ BASE44_API_KEY = os.environ["BASE44_API_KEY"]
 BASE44_URL = f"https://app.base44.com/api/apps/{BASE44_APP_ID}/entities/NewsArticle"
 
 RSS_FEEDS = [
-    "https://www.coindesk.com/arc/outboundfeeds/rss/",
-    "https://cointelegraph.com/rss",
+    {"url": "https://chainwire.org/feed/", "source_name": "Chainwire"},
+    {"url": "https://www.bnbchain.org/en/blog/rss.xml", "source_name": "BNB Chain"},
 ]
-
-# دسته‌بندی‌های مجاز طبق اسکیمای Base44
-VALID_CATEGORIES = ["Bitcoin", "Altcoins", "DeFi", "NFT", "Regulation"]
 
 def extract_image(entry):
     if "media_content" in entry and entry.media_content:
         return entry.media_content[0].get("url")
     if "media_thumbnail" in entry and entry.media_thumbnail:
         return entry.media_thumbnail[0].get("url")
-    match = re.search(r'<img[^>]+src="([^"]+)"', entry.get("summary", ""))
+    raw = entry.get("content", [{}])[0].get("value", "") if entry.get("content") else entry.get("summary", "")
+    match = re.search(r'<img[^>]+src="([^"]+)"', raw)
     if match:
         return match.group(1)
     return None
@@ -34,63 +32,75 @@ def has_good_image(url):
     except Exception:
         return False
 
-def clean_text(html_text):
-    text = re.sub(r"<[^>]+>", " ", html_text or "")
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
+def html_to_markdown(html_text):
+    text = html_text or ""
+    text = re.sub(r"<h[1-6][^>]*>(.*?)</h[1-6]>", r"\n## \1\n", text, flags=re.DOTALL)
+    text = re.sub(r"<strong[^>]*>(.*?)</strong>", r"**\1**", text, flags=re.DOTALL)
+    text = re.sub(r"<b[^>]*>(.*?)</b>", r"**\1**", text, flags=re.DOTALL)
+    text = re.sub(r"<li[^>]*>(.*?)</li>", r"- \1\n", text, flags=re.DOTALL)
+    text = re.sub(r"</p>", "\n\n", text)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = re.sub(r"[ \t]+", " ", text)
+    return text.strip()
 
-def guess_category(title, summary):
-    text = (title + " " + summary).lower()
-    if "bitcoin" in text or "btc" in text:
+def get_full_content(entry):
+    if entry.get("content"):
+        return entry["content"][0]["value"]
+    return entry.get("summary", "")
+
+def slugify(title):
+    s = re.sub(r"[^a-zA-Z0-9]+", "-", title.lower()).strip("-")
+    return s[:80]
+
+def guess_category(title, text):
+    t = (title + " " + text).lower()
+    if "bitcoin" in t or "btc" in t:
         return "Bitcoin"
-    if "defi" in text:
+    if "defi" in t:
         return "DeFi"
-    if "nft" in text:
+    if "nft" in t:
         return "NFT"
-    if "regulat" in text or "sec " in text or "law" in text:
+    if "regulat" in t or "sec " in t or "law" in t:
         return "Regulation"
     return "Altcoins"
 
-def format_markdown(title, raw_html):
-    body = clean_text(raw_html)
-    return f"## {title}\n\n{body}"
-
-def push_to_base44(entry, image_url):
+def push_to_base44(entry, image_url, source_name):
     title = entry.get("title", "بدون عنوان")
-    raw_summary = entry.get("summary", "")
-    clean_summary = clean_text(raw_summary)
+    raw_html = get_full_content(entry)
+    markdown_body = html_to_markdown(raw_html)
     published = entry.get("published", datetime.utcnow().isoformat())
+
+    full_content = f"{markdown_body}\n\n---\n*منبع: {source_name}*"
+
+    plain_text = re.sub(r"[#*\-]", "", markdown_body)
+    summary = re.sub(r"\s+", " ", plain_text).strip()[:200]
 
     payload = {
         "title": title,
-        "summary": clean_summary[:200] if clean_summary else title,
-        "content": format_markdown(title, raw_summary),
-        "category": guess_category(title, clean_summary),
+        "summary": summary if summary else title,
+        "content": full_content,
+        "category": guess_category(title, plain_text),
         "image_url": image_url,
-        "author": entry.get("source_name", "unknown"),
+        "author": source_name,
         "published_date": published,
     }
 
     r = requests.post(
         BASE44_URL,
         json=payload,
-        headers={
-            "api_key": BASE44_API_KEY,
-            "Content-Type": "application/json"
-        },
-        timeout=10
+        headers={"api_key": BASE44_API_KEY, "Content-Type": "application/json"},
+        timeout=20
     )
     print(title, "->", r.status_code, r.text[:200])
 
 def main():
-    for feed_url in RSS_FEEDS:
-        feed = feedparser.parse(feed_url)
-        source_name = feed.feed.get("title", feed_url)
+    for feed_info in RSS_FEEDS:
+        feed = feedparser.parse(feed_info["url"])
         for entry in feed.entries[:10]:
-            entry["source_name"] = source_name
             image_url = extract_image(entry)
             if has_good_image(image_url):
-                push_to_base44(entry, image_url)
+                push_to_base44(entry, image_url, feed_info["source_name"])
 
 if __name__ == "__main__":
     main()
