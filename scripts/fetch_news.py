@@ -12,6 +12,8 @@ RSS_FEEDS = [
     {"url": "https://www.prnewswire.com/rss/financial-services-latest-news/cryptocurrency-list.rss", "source_name": "PR Newswire"},
 ]
 
+MAX_CONTENT_LENGTH = 3000  # جلوگیری از رد شدن از سقف احتمالی فیلد content
+
 def extract_image(entry):
     if "media_content" in entry and entry.media_content:
         return entry.media_content[0].get("url")
@@ -71,20 +73,28 @@ def guess_category(title, text):
         return "Regulation"
     return "Altcoins"
 
+def build_content(markdown_body, source_name):
+    footer = f"\n\n---\n*Source: {source_name}*"
+    max_body_len = MAX_CONTENT_LENGTH - len(footer) - 5
+    body = markdown_body
+    if len(body) > max_body_len:
+        body = body[:max_body_len].rsplit(" ", 1)[0] + "…"
+    return body + footer
+
 def push_to_base44(entry, image_url, source_name):
     title = entry.get("title", "Untitled")
     raw_html = get_full_content(entry)
     markdown_body = html_to_markdown(raw_html)
     published = get_published_date(entry)
 
-    full_content = f"{markdown_body}\n\n---\n*Source: {source_name}*"
+    full_content = build_content(markdown_body, source_name)
 
     plain_text = re.sub(r"[#*\-]", "", markdown_body)
     summary = re.sub(r"\s+", " ", plain_text).strip()[:200]
 
     payload = {
-        "title": title,
-        "summary": summary if summary else title,
+        "title": title[:200],
+        "summary": summary if summary else title[:200],
         "content": full_content,
         "category": guess_category(title, plain_text),
         "image_url": image_url,
@@ -98,7 +108,7 @@ def push_to_base44(entry, image_url, source_name):
         headers={"api_key": BASE44_API_KEY, "Content-Type": "application/json"},
         timeout=20
     )
-    print(title, "->", r.status_code, r.text[:200])
+    print(title, "->", r.status_code, r.text[:300])
 
 def main():
     for feed_info in RSS_FEEDS:
