@@ -6,7 +6,7 @@ import feedparser
 from datetime import datetime
 from bs4 import BeautifulSoup
 from newspaper import Article
-from urllib.parse import urljoin
+from urllib.parse import urljoin, quote
 
 BASE44_APP_ID = os.environ.get("BASE44_APP_ID", "")
 BASE44_API_KEY = os.environ.get("BASE44_API_KEY", "")
@@ -22,6 +22,15 @@ RSS_FEEDS = [
 
 MAX_CONTENT_LENGTH = 7000
 
+# تصاویر باکیفیت HD تضمین‌شده برای مواردی که عکس اصلی خبر مسدود است
+CATEGORY_FALLBACK_IMAGES = {
+    "Bitcoin": "https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=1200&q=80",
+    "DeFi": "https://images.unsplash.com/photo-1639762681485-074b7f938ba0?auto=format&fit=crop&w=1200&q=80",
+    "NFT": "https://images.unsplash.com/photo-1620641788421-7a1c342ea42e?auto=format&fit=crop&w=1200&q=80",
+    "Regulation": "https://images.unsplash.com/photo-1450133064473-71024230f91b?auto=format&fit=crop&w=1200&q=80",
+    "Altcoins": "https://images.unsplash.com/photo-1621416894569-0f39ed31d247?auto=format&fit=crop&w=1200&q=80",
+}
+
 USER_AGENTS = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
@@ -34,6 +43,14 @@ def get_headers():
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.9',
     }
+
+def get_proxied_image_url(original_url):
+    """عبور از مسدودسازی عکس توسط فایروال با استفاده از پروکسی معتبر wsrv.nl"""
+    if not original_url or not original_url.startswith("http"):
+        return None
+    if "unsplash.com" in original_url:
+        return original_url
+    return f"https://wsrv.nl/?url={quote(original_url, safe='')}&output=jpg&q=85"
 
 def normalize_image_url(img_url, base_url):
     if not img_url or not isinstance(img_url, str):
@@ -48,25 +65,13 @@ def normalize_image_url(img_url, base_url):
 def is_valid_image(url):
     if not url or not isinstance(url, str):
         return False
-    
     url = url.strip()
     if not (url.startswith("http://") or url.startswith("https://")):
         return False
-        
     bad_keywords = ['logo', 'icon', 'avatar', '150x150', '300x300', 'placeholder', '.svg']
     if any(bad in url.lower() for bad in bad_keywords):
         return False
-
-    try:
-        r = requests.head(url, headers=get_headers(), timeout=6, allow_redirects=True)
-        if r.status_code != 200:
-            r = requests.get(url, headers=get_headers(), timeout=6, allow_redirects=True, stream=True)
-        
-        c_type = r.headers.get("Content-Type", "").lower()
-        has_img_ext = any(ext in url.lower() for ext in ['.jpg', '.jpeg', '.png', '.webp', '.avif'])
-        return r.status_code == 200 and ("image" in c_type or has_img_ext)
-    except Exception:
-        return False
+    return True
 
 def fetch_html_bs4(url):
     try:
@@ -80,14 +85,12 @@ def fetch_html_bs4(url):
 def extract_hd_meta_image(soup, article_url):
     if not soup:
         return None
-    
     meta_tags = [
         {'property': 'og:image'},
         {'name': 'og:image'},
         {'name': 'twitter:image'},
         {'property': 'twitter:image'}
     ]
-    
     for tag_attr in meta_tags:
         tag = soup.find('meta', tag_attr)
         if tag and tag.get('content'):
@@ -182,18 +185,20 @@ def push_to_base44(entry, source_name):
     if not link or not title:
         return
 
-    full_text, image_url = extract_article_details(link, entry)
+    full_text, raw_image_url = extract_article_details(link, entry)
 
     if len(full_text.split()) < 100:
         print(f"[SKIP] Article too short: {title}")
         return
 
-    # بررسی سخت‌گیرانه سلامت عکس
-    if not is_valid_image(image_url):
-        print(f"[SKIP - NO IMAGE] No valid working image found for: {title}")
-        return
-
     category = guess_category(title, full_text)
+
+    # عبور دادن تصویر خبر از پروکسی ضد بلاک، یا انتخاب عکس HD از Unsplash
+    if is_valid_image(raw_image_url):
+        final_image_url = get_proxied_image_url(raw_image_url)
+    else:
+        final_image_url = CATEGORY_FALLBACK_IMAGES.get(category, CATEGORY_FALLBACK_IMAGES["Altcoins"])
+
     full_content = format_rich_content(full_text, source_name)
 
     clean_summary = re.sub(r'[\#\*\_]', '', full_text)
@@ -202,20 +207,18 @@ def push_to_base44(entry, source_name):
     published_parsed = entry.get("published_parsed")
     published_date = datetime(*published_parsed[:6]).strftime("%Y-%m-%d") if published_parsed else datetime.utcnow().strftime("%Y-%m-%d")
 
-    # ارسال تمامی نام‌های متداول فیلد عکس تا هر اسمی که در دیتابیس بیس ۴۴ تعریف شده پر شود
     payload = {
         "title": title[:200],
         "summary": summary,
         "content": full_content,
         "category": category,
         
-        # پوشش تمام نام‌های احتمالی فیلد تصویر در Base44
-        "image": image_url,
-        "image_url": image_url,
-        "imageUrl": image_url,
-        "cover_image": image_url,
-        "feature_image": image_url,
-        "thumbnail": image_url,
+        "image": final_image_url,
+        "image_url": final_image_url,
+        "imageUrl": final_image_url,
+        "cover_image": final_image_url,
+        "feature_image": final_image_url,
+        "thumbnail": final_image_url,
         
         "author": source_name,
         "published_date": published_date,
@@ -232,7 +235,7 @@ def push_to_base44(entry, source_name):
             headers={"api_key": BASE44_API_KEY, "Content-Type": "application/json"},
             timeout=20
         )
-        print(f"[SUCCESS] {title[:40]}... | Image: {image_url[:40]}... | Status: {res.status_code}")
+        print(f"[SUCCESS] {title[:40]}... | Image: {final_image_url[:45]}... | Status: {res.status_code}")
     except Exception as e:
         print(f"[ERROR] Base44 push failed: {e}")
 
