@@ -7,12 +7,10 @@ from datetime import datetime
 from bs4 import BeautifulSoup
 from newspaper import Article
 
-# تنظیمات بیس ۴۴
 BASE44_APP_ID = os.environ.get("BASE44_APP_ID", "")
 BASE44_API_KEY = os.environ.get("BASE44_API_KEY", "")
 BASE44_URL = f"https://app.base44.com/api/apps/{BASE44_APP_ID}/entities/NewsArticle"
 
-# معتبرترین و کامل‌ترین منابع خبری کریپتو در جهان
 RSS_FEEDS = [
     {"url": "https://cointelegraph.com/rss", "source_name": "Cointelegraph"},
     {"url": "https://www.coindesk.com/arc/outboundfeeds/rss/", "source_name": "CoinDesk"},
@@ -23,7 +21,6 @@ RSS_FEEDS = [
 
 MAX_CONTENT_LENGTH = 7000
 
-# تصویر باکیفیت HD جایگزین (Unsplash) در صورت نداشتن تصویر اصلی جهت جلوگیری از لغو ارسال خبر
 DEFAULT_CATEGORY_IMAGES = {
     "Bitcoin": "https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=1200&q=80",
     "DeFi": "https://images.unsplash.com/photo-1639762681485-074b7f938ba0?auto=format&fit=crop&w=1200&q=80",
@@ -46,7 +43,6 @@ def get_headers():
     }
 
 def fetch_html_bs4(url):
-    """دریافت مستقیم HTML برای استخراج دقیق تگ‌های تصویر اورجینال"""
     try:
         resp = requests.get(url, headers=get_headers(), timeout=12)
         if resp.status_code == 200:
@@ -56,7 +52,6 @@ def fetch_html_bs4(url):
     return None
 
 def extract_hd_meta_image(soup):
-    """استخراج مستقیم عکس اصلی با رزولوشن بالا از متاتگ‌های OpenGraph و Twitter"""
     if not soup:
         return None
     
@@ -71,22 +66,18 @@ def extract_hd_meta_image(soup):
         tag = soup.find('meta', tag_attr)
         if tag and tag.get('content'):
             img_url = tag['content'].strip()
-            # فیلتر عکس‌های آیکون یا بنرهای کوچک
             if img_url.startswith('http') and not any(bad in img_url.lower() for bad in ['logo', 'icon', 'avatar', '150x150', '300x300']):
                 return img_url
     return None
 
 def extract_article_details(article_url, fallback_entry):
-    """استخراج جامع متن خبر و تصویر HD از چند لایه مختلف"""
     full_text = ""
     image_url = None
     soup = fetch_html_bs4(article_url)
 
-    # لایه ۱: استخراج عکس کیفیت بالا با BeautifulSoup
     if soup:
         image_url = extract_hd_meta_image(soup)
 
-    # لایه ۲: استفاده از newspaper4k برای دریافت متن و عکس جایگزین
     try:
         article = Article(article_url, language='en')
         article.config.headers = get_headers()
@@ -99,11 +90,9 @@ def extract_article_details(article_url, fallback_entry):
     except Exception as e:
         print(f"[INFO] Scraping via Newspaper4k failed for {article_url}: {e}")
 
-    # لایه ۳: فال‌بک تصویر از داخل فید RSS
     if not image_url:
         image_url = extract_rss_image(fallback_entry)
 
-    # لایه ۴: فال‌بک متن از summary فید اگر scraping ناموفق بود
     if not full_text:
         raw_html = fallback_entry.get("content", [{}])[0].get("value", "") if fallback_entry.get("content") else fallback_entry.get("summary", "")
         full_text = clean_html_to_text(raw_html)
@@ -111,7 +100,6 @@ def extract_article_details(article_url, fallback_entry):
     return full_text, image_url
 
 def extract_rss_image(entry):
-    """دریافت عکس موجود در کدهای RSS"""
     if "media_content" in entry and entry.media_content:
         return entry.media_content[0].get("url")
     if "media_thumbnail" in entry and entry.media_thumbnail:
@@ -141,21 +129,17 @@ def guess_category(title, text):
         return "Regulation"
     return "Altcoins"
 
-def format_rich_content(title, body_text, source_name):
-    """فرمت‌بندی حرفه‌ای متن خبر جهت نمایش شکیل در وب‌سایت"""
+def format_rich_content(body_text, source_name):
     paragraphs = [p.strip() for p in body_text.split('\n') if len(p.strip()) > 30]
     
-    # ایجاد یک ساختار جذاب خبری
-    formatted_body = f"### 📌 Overview\n{paragraphs[0] if paragraphs else body_text[:300]}\n\n"
-    
-    if len(paragraphs) > 1:
-        formatted_body += "### 🔍 Key Details\n"
+    formatted_body = ""
+    if paragraphs:
+        formatted_body += f"{paragraphs[0]}\n\n"
         formatted_body += "\n\n".join(paragraphs[1:])
     else:
-        formatted_body += body_text
+        formatted_body = body_text
 
-    footer = f"\n\n---\n*Source: [{source_name}]*"
-    
+    footer = f"\n\n---\nSource: {source_name}"
     max_len = MAX_CONTENT_LENGTH - len(footer)
     if len(formatted_body) > max_len:
         formatted_body = formatted_body[:max_len].rsplit(" ", 1)[0] + "…"
@@ -169,30 +153,26 @@ def push_to_base44(entry, source_name):
     if not link or not title:
         return
 
-    # استخراج خبر کامل و عکس
     full_text, image_url = extract_article_details(link, entry)
 
-    # فیلتر اخبار خیلی کوتاه (معمولا اخبار کم‌ارزش یا اسپم)
-    if len(full_text.split()) < 120:
-        print(f"[SKIP] Article too short/incomplete: {title}")
+    if len(full_text.split()) < 100:
+        print(f"[SKIP] Article too short: {title}")
         return
 
     category = guess_category(title, full_text)
 
-    # اگر عکس استخراج نشد، از عکس باکیفیت فول HD بر اساس دسته‌بندی استفاده کن تا خبر از دست نرود
     if not image_url or "http" not in image_url:
         image_url = DEFAULT_CATEGORY_IMAGES.get(category, DEFAULT_CATEGORY_IMAGES["Altcoins"])
 
-    # ساخت متن کامل شکیل
-    full_content = format_rich_content(title, full_text, source_name)
+    full_content = format_rich_content(full_text, source_name)
 
-    # خلاصه هوشمند و تمیز برای کارت‌های سایت‌ساز
     clean_summary = re.sub(r'[\#\*\_]', '', full_text)
-    summary = " ".join(clean_summary.split()[:40]) + "..."
+    summary = " ".join(clean_summary.split()[:35]) + "..."
 
     published_parsed = entry.get("published_parsed")
     published_date = datetime(*published_parsed[:6]).strftime("%Y-%m-%d") if published_parsed else datetime.utcnow().strftime("%Y-%m-%d")
 
+    # افزودن پارامترهای انتشار برای جلوگیری از رفتن اخبار به حالت Draft در بیس 44
     payload = {
         "title": title[:200],
         "summary": summary,
@@ -201,6 +181,9 @@ def push_to_base44(entry, source_name):
         "image_url": image_url,
         "author": source_name,
         "published_date": published_date,
+        "status": "published",
+        "published": True,
+        "is_published": True
     }
 
     try:
@@ -210,7 +193,8 @@ def push_to_base44(entry, source_name):
             headers={"api_key": BASE44_API_KEY, "Content-Type": "application/json"},
             timeout=20
         )
-        print(f"[SUCCESS] {title[:50]}... -> Status: {res.status_code}")
+        # چاپ کامل پاسخ بیس ۴۴ برای عیب‌یابی دقیق‌تر
+        print(f"[SUCCESS] {title[:40]}... | Response: {res.text[:150]}")
     except Exception as e:
         print(f"[ERROR] Base44 push failed: {e}")
 
@@ -227,7 +211,6 @@ def main():
                 print(f"[WARN] No entries found for {feed_info['source_name']}")
                 continue
 
-            # دریافت ۳ خبر برتر و عمیق از هر منبع اصلی
             for entry in feed.entries[:3]:
                 push_to_base44(entry, feed_info["source_name"])
         except Exception as e:
