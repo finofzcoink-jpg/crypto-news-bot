@@ -36,7 +36,6 @@ def get_headers():
     }
 
 def normalize_image_url(img_url, base_url):
-    """تبدیل آدرس‌های نسبی عکس به آدرس کامل و استاندارد"""
     if not img_url or not isinstance(img_url, str):
         return None
     img_url = img_url.strip()
@@ -47,7 +46,6 @@ def normalize_image_url(img_url, base_url):
     return img_url
 
 def is_valid_image(url):
-    """بررسی زنده سالم بودن و معتبر بودن آدرس تصویر"""
     if not url or not isinstance(url, str):
         return False
     
@@ -55,13 +53,11 @@ def is_valid_image(url):
     if not (url.startswith("http://") or url.startswith("https://")):
         return False
         
-    # فیلتر آیکون‌ها، لوگوها و تصاویر بسیار کوچک
     bad_keywords = ['logo', 'icon', 'avatar', '150x150', '300x300', 'placeholder', '.svg']
     if any(bad in url.lower() for bad in bad_keywords):
         return False
 
     try:
-        # ارسال درخواست تست برای اطمینان از سلامت لینک عکس
         r = requests.head(url, headers=get_headers(), timeout=6, allow_redirects=True)
         if r.status_code != 200:
             r = requests.get(url, headers=get_headers(), timeout=6, allow_redirects=True, stream=True)
@@ -119,11 +115,9 @@ def extract_article_details(article_url, fallback_entry):
     image_url = None
     soup = fetch_html_bs4(article_url)
 
-    # ۱. استخراج عکس از متاتگ‌های اصلی وب‌سایت
     if soup:
         image_url = extract_hd_meta_image(soup, article_url)
 
-    # ۲. استفاده از Newspaper4k
     try:
         article = Article(article_url, language='en')
         article.config.headers = get_headers()
@@ -136,7 +130,6 @@ def extract_article_details(article_url, fallback_entry):
     except Exception as e:
         print(f"[INFO] Scraping via Newspaper4k failed for {article_url}: {e}")
 
-    # ۳. استخراج عکس از فید RSS
     if not image_url:
         image_url = extract_rss_image(fallback_entry, article_url)
 
@@ -191,12 +184,11 @@ def push_to_base44(entry, source_name):
 
     full_text, image_url = extract_article_details(link, entry)
 
-    # فیلتر ۱: اگر متن خبر خیلی کوتاه باشد
     if len(full_text.split()) < 100:
         print(f"[SKIP] Article too short: {title}")
         return
 
-    # فیلتر ۲ (اصلی): اگر عکس وجود نداشته باشد یا لینک عکس خراب/غیرمعتبر باشد، خبر اصلاً فرستاده نمی‌شود
+    # بررسی سخت‌گیرانه سلامت عکس
     if not is_valid_image(image_url):
         print(f"[SKIP - NO IMAGE] No valid working image found for: {title}")
         return
@@ -210,14 +202,24 @@ def push_to_base44(entry, source_name):
     published_parsed = entry.get("published_parsed")
     published_date = datetime(*published_parsed[:6]).strftime("%Y-%m-%d") if published_parsed else datetime.utcnow().strftime("%Y-%m-%d")
 
+    # ارسال تمامی نام‌های متداول فیلد عکس تا هر اسمی که در دیتابیس بیس ۴۴ تعریف شده پر شود
     payload = {
         "title": title[:200],
         "summary": summary,
         "content": full_content,
         "category": category,
+        
+        # پوشش تمام نام‌های احتمالی فیلد تصویر در Base44
+        "image": image_url,
         "image_url": image_url,
+        "imageUrl": image_url,
+        "cover_image": image_url,
+        "feature_image": image_url,
+        "thumbnail": image_url,
+        
         "author": source_name,
         "published_date": published_date,
+        "date": published_date,
         "status": "published",
         "published": True,
         "is_published": True
@@ -230,7 +232,7 @@ def push_to_base44(entry, source_name):
             headers={"api_key": BASE44_API_KEY, "Content-Type": "application/json"},
             timeout=20
         )
-        print(f"[SUCCESS] {title[:40]}... | Image: Validated OK | Status: {res.status_code}")
+        print(f"[SUCCESS] {title[:40]}... | Image: {image_url[:40]}... | Status: {res.status_code}")
     except Exception as e:
         print(f"[ERROR] Base44 push failed: {e}")
 
